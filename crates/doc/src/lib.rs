@@ -17,6 +17,7 @@ pub mod encoding;
 pub mod fields;
 pub mod freeform;
 pub mod graphic;
+pub mod link;
 pub mod math;
 pub mod math_edit;
 pub mod math_latex;

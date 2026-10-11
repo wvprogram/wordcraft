@@ -1131,11 +1131,13 @@ impl Exporter<'_> {
                     None => continue,
                 }
             } else {
-                let url = target.trim();
-                if url.is_empty() {
+                // Only web and mail links become URI actions: a document's `javascript:` or
+                // `file:` link would otherwise be handed to whatever viewer opens the PDF.
+                let url = wordcraft_doc::link::normalized(target);
+                if !wordcraft_doc::link::is_followable(&url) {
                     continue;
                 }
-                Target::Action(Action::Link(LinkAction::new(url.to_string())))
+                Target::Action(Action::Link(LinkAction::new(url)))
             };
             v.push(Annotation::new_link(LinkAnnotation::new(rect, t), Some(target.clone())));
         }
