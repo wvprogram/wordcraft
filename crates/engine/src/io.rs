@@ -26,9 +26,15 @@ pub const OPEN_EXTS: &[&str] = &[
 /// Formats WordCraft saves (Save As).
 pub const SAVE_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "pdf", "txt", "md", "html", "rtf", "odt", "tex", "png", "json"];
 
+/// The lower-case extension of a file name or path (`""` when it has none): only the last
+/// component counts, so `/home/john.smith/notes` has no extension and `.bashrc` is a name, not an
+/// extension. Both separators are accepted (names can come from Windows or the web).
 fn ext_of(name: &str) -> String {
-    let lower = name.to_ascii_lowercase();
-    lower.rsplit('.').next().unwrap_or("").to_string()
+    let file = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    match file.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => ext.to_ascii_lowercase(),
+        _ => String::new(),
+    }
 }
 
 /// Is `ext` one of Word's package formats (.docx/.docm/.dotx/.dotm), which save without loss?

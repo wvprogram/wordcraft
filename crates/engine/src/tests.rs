@@ -2764,3 +2764,18 @@ fn hostile_link_targets_do_not_become_live_links_in_exports() {
     let pdf = crate::io::save_bytes("ok.pdf", &doc).unwrap();
     assert!(pdf.windows(19).any(|w| w == b"https://example.com"), "the web link is a PDF link");
 }
+
+/// Files without an extension open as plain text, including in folders whose names have dots
+/// (`ext_of` used to take everything after the last dot of the whole path, so `README` was an
+/// "unsupported format `.../README`" and `/home/john.smith/notes` had the extension `smith/notes`).
+#[test]
+fn files_without_an_extension_open_as_text() {
+    for name in ["README", "/home/john.smith/notes", "C:\\Users\\john.smith\\Documents\\todo", ".bashrc", "/tmp/a.b/.profile"] {
+        let doc = crate::io::open_bytes(name, b"plain words").unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(doc.plain_text(StoryRef::Body).trim(), "plain words", "{name}");
+    }
+    // Real extensions are still read from the file name, in any case.
+    assert!(crate::io::open_bytes("/home/john.smith/Report.MD", b"# Title\n").is_ok());
+    assert!(crate::io::open_bytes("/home/john.smith/notes.xyz", b"x").is_err_and(|e| e.contains("`.xyz`")));
+    assert!(crate::io::save_bytes("/home/john.smith/report", &wordcraft_doc::Document::new()).is_err());
+}
