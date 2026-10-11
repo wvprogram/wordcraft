@@ -5,6 +5,7 @@ use std::io::{BufRead, Write};
 use serde_json::{Value, json};
 
 use crate::backend::Backend;
+use crate::paths::PathPolicy;
 use crate::tools::{call_tool, tool_definitions};
 
 /// The MCP revision we implement.
@@ -32,6 +33,8 @@ pub const COMMANDS_URI: &str = "wordcraft://commands";
 pub struct Server {
     backend: Box<dyn Backend>,
     initialized: bool,
+    /// The folder agents' file paths must stay inside.
+    paths: PathPolicy,
 }
 
 fn response(id: Value, result: Value) -> Value {
@@ -43,8 +46,14 @@ fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
 }
 
 impl Server {
+    /// A server whose agents may use files in the current folder only (see [`Server::with_paths`]).
     pub fn new(backend: Box<dyn Backend>) -> Self {
-        Self { backend, initialized: false }
+        Self::with_paths(backend, PathPolicy::current_dir())
+    }
+
+    /// A server whose agents may use files inside `paths`' folder only.
+    pub fn with_paths(backend: Box<dyn Backend>, paths: PathPolicy) -> Self {
+        Self { backend, initialized: false, paths }
     }
 
     pub fn backend(&mut self) -> &mut dyn Backend {
@@ -145,7 +154,7 @@ impl Server {
             "tools/call" => {
                 let name = params.get("name").and_then(Value::as_str).ok_or((INVALID_PARAMS, "missing tool `name`".to_string()))?;
                 let args = params.get("arguments").cloned().unwrap_or(Value::Null);
-                Ok(call_tool(self.backend.as_mut(), name, &args).to_value())
+                Ok(call_tool(self.backend.as_mut(), &self.paths, name, &args).to_value())
             }
             "resources/list" => Ok(json!({"resources": [
                 {"uri": DOC_URI, "name": "document", "title": "Active document", "description": "Blocks, text, formatting, sections, parts and selection of the document (document.inspect)", "mimeType": "application/json"},

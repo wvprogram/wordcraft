@@ -3,6 +3,7 @@
 use serde_json::{Value, json};
 
 use crate::backend::Backend;
+use crate::paths::PathPolicy;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ToolResult {
@@ -146,7 +147,10 @@ pub fn tool_definitions() -> Value {
     ])
 }
 
-fn exec(b: &mut dyn Backend, id: &str, params: Value) -> Result<Value, String> {
+/// Run a command for the agent. Every `"path"` in its parameters must be inside the server's
+/// folder (see [`PathPolicy`]) and is passed on as an absolute path.
+fn exec(b: &mut dyn Backend, paths: &PathPolicy, id: &str, params: Value) -> Result<Value, String> {
+    let params = paths.confine(params)?;
     b.call("engine.execute", json!({"command": id, "params": params}))
 }
 
@@ -157,7 +161,7 @@ fn wrap(r: Result<Value, String>) -> ToolResult {
     }
 }
 
-pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
+pub fn call_tool(b: &mut dyn Backend, paths: &PathPolicy, name: &str, a: &Value) -> ToolResult {
     let st = |k: &str| a.get(k).and_then(Value::as_str);
     match name {
         "list_commands" => {
@@ -180,7 +184,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
             }
         }
         "execute" => match st("command") {
-            Some(c) => wrap(exec(b, c, a.get("params").cloned().unwrap_or(json!({})))),
+            Some(c) => wrap(exec(b, paths, c, a.get("params").cloned().unwrap_or(json!({})))),
             None => ToolResult::error("missing `command`"),
         },
         "batch" => {
@@ -188,7 +192,7 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
             let mut out = Vec::new();
             for c in a.get("commands").and_then(Value::as_array).cloned().unwrap_or_default() {
                 let id = c.get("command").and_then(Value::as_str).unwrap_or("");
-                let r = exec(b, id, c.get("params").cloned().unwrap_or(json!({})));
+                let r = exec(b, paths, id, c.get("params").cloned().unwrap_or(json!({})));
                 let failed = r.is_err();
                 out.push(match r {
                     Ok(v) => json!({"command": id, "ok": true, "result": v}),
@@ -200,16 +204,17 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
             }
             ToolResult::json(&Value::Array(out))
         }
-        "new_document" => wrap(exec(b, "file.new", json!({"template": st("template").unwrap_or("blank")}))),
-        "open_document" => wrap(exec(b, "file.open", json!({"path": st("path").unwrap_or("")}))),
+        "new_document" => wrap(exec(b, paths, "file.new", json!({"template": st("template").unwrap_or("blank")}))),
+        "open_document" => wrap(exec(b, paths, "file.open", json!({"path": st("path").unwrap_or("")}))),
         "save_document" => {
             let p = st("path");
             let ext = p.and_then(|x| x.rsplit('.').next()).unwrap_or("").to_ascii_lowercase();
             if ext == "png" {
-                wrap(exec(b, "file.exportPng", json!({"path": p})))
+                wrap(exec(b, paths, "file.exportPng", json!({"path": p})))
             } else {
                 wrap(exec(
                     b,
+                    paths,
                     "file.save",
                     match p {
                         Some(p) => json!({"path": p}),
@@ -224,10 +229,10 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
                 let mut last = Ok(Value::Null);
                 for (i, line) in t.split('\n').enumerate() {
                     if i > 0 {
-                        last = exec(b, "text.newParagraph", json!({}));
+                        last = exec(b, paths, "text.newParagraph", json!({}));
                     }
                     if !line.is_empty() {
-                        last = exec(b, "text.insert", json!({"text": line, "raw": true}));
+                        last = exec(b, paths, "text.insert", json!({"text": line, "raw": true}));
                     }
                     if last.is_err() {
                         break;
@@ -235,13 +240,16 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
                 }
                 wrap(last)
             } else {
-                wrap(exec(b, "text.insert", json!({"text": t, "raw": true})))
+                wrap(exec(b, paths, "text.insert", json!({"text": t, "raw": true})))
             }
         }
-        "select_text" => {
-            wrap(exec(b, "select.text", json!({"text": st("text").unwrap_or(""), "occurrence": a.get("occurrence").cloned().unwrap_or(json!(1))})))
-        }
-        "get_text" => wrap(exec(b, "document.text", json!({}))),
+        "select_text" => wrap(exec(
+            b,
+            paths,
+            "select.text",
+            json!({"text": st("text").unwrap_or(""), "occurrence": a.get("occurrence").cloned().unwrap_or(json!(1))}),
+        )),
+        "get_text" => wrap(exec(b, paths, "document.text", json!({}))),
         "inspect_document" => wrap(b.call("document.inspect", json!({}))),
         "parity" => wrap(b.call("ui.parity", json!({}))),
         "render_page" => {
