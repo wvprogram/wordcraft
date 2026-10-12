@@ -315,7 +315,8 @@ impl Writer {
         if let Some(size) = f.size.filter(|v| v.is_finite() && *v >= 1.0 && *v <= 1638.0) {
             s = format!("{{\\fontsize{{{}}}{{{}}}\\selectfont {s}}}", num(size), num(size * 1.2));
         }
-        if let Some(l) = f.link.as_deref().filter(|l| !l.is_empty()) {
+        // Only safe targets become links (`\href{javascript:…}` would be live in the PDF).
+        if let Some(l) = f.link.as_deref().filter(|l| !l.is_empty() && wordcraft_doc::link::is_safe_target(l)) {
             s = match l.strip_prefix('#') {
                 Some(target) => format!("\\hyperlink{{{}}}{{{s}}}", escape_url(target)),
                 None => format!("\\href{{{}}}{{{s}}}", escape_url(l)),

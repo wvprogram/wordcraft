@@ -67,3 +67,51 @@ fn resources() {
     let r = call(&mut s, 2, "resources/read", json!({"uri": "wordcraft://document"}));
     assert!(r["result"]["contents"][0]["text"].as_str().unwrap().contains("blocks"));
 }
+
+/// An agent steered by a hostile document must not read or overwrite files outside the server's
+/// folder: through `open_document`, `save_document`, `execute`, `batch`, or a path nested in a
+/// recorded macro. Before `--root`, `file.open` read any text file and `file.exportPng`
+/// overwrote any file.
+#[test]
+fn agents_cannot_reach_files_outside_the_root() {
+    let base = std::env::temp_dir().join(format!("wordcraft-mcp-root-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let (root, private) = (base.join("work"), base.join("private"));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&private).unwrap();
+    let secret = private.join("passwords.txt");
+    std::fs::write(&secret, "bank pin 4321").unwrap();
+    let notes = private.join("notes.md");
+    std::fs::write(&notes, "my notes").unwrap();
+    let mut s = Server::with_paths(Box::new(Headless::default()), crate::PathPolicy::within(&root).unwrap());
+    let refused = |s: &mut Server, name: &str, args: Value| {
+        let r = call(s, 20, "tools/call", json!({"name": name, "arguments": args}));
+        assert_eq!(r["result"]["isError"], true, "{name} {args}: {r}");
+        assert!(r["result"]["content"][0]["text"].as_str().unwrap_or("").contains("outside"), "{r}");
+    };
+    let (secret_s, notes_s) = (secret.to_string_lossy().to_string(), notes.to_string_lossy().to_string());
+    refused(&mut s, "open_document", json!({"path": secret_s}));
+    refused(&mut s, "open_document", json!({"path": "../private/passwords.txt"}));
+    refused(&mut s, "save_document", json!({"path": notes_s}));
+    refused(&mut s, "save_document", json!({"path": "../private/out.png"}));
+    refused(&mut s, "execute", json!({"command": "file.exportPng", "params": {"path": notes_s}}));
+    refused(&mut s, "execute", json!({"command": "insert.textFromFile", "params": {"path": secret_s}}));
+    refused(&mut s, "batch", json!({"commands": [{"command": "file.exportPdf", "params": {"path": notes_s}}]}));
+    refused(
+        &mut s,
+        "execute",
+        json!({"command": "tools.macros", "params": {"define": "m", "steps": [{"command": "file.open", "params": {"path": secret_s}}]}}),
+    );
+    let text = tool(&mut s, "get_text", json!({}));
+    assert!(!text.to_string().contains("4321"), "the secret was not read");
+    assert_eq!(std::fs::read_to_string(&notes).unwrap(), "my notes", "the file outside was not overwritten");
+
+    // Inside the folder everything works, with relative paths too.
+    tool(&mut s, "type_text", json!({"text": "Inside the root"}));
+    tool(&mut s, "save_document", json!({"path": "report.docx"}));
+    assert!(root.join("report.docx").exists());
+    tool(&mut s, "new_document", json!({}));
+    tool(&mut s, "open_document", json!({"path": "report.docx"}));
+    assert!(tool(&mut s, "get_text", json!({})).to_string().contains("Inside the root"));
+    let _ = std::fs::remove_dir_all(&base);
+}

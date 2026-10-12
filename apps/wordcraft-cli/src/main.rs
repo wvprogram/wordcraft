@@ -20,8 +20,10 @@ USAGE:
                                               who tracked changes and comments are by)
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
-  wordcraft-cli mcp [--connect HOST:PORT | --author NAME]
-                                              MCP server on stdio (headless, or bridged to the app)
+  wordcraft-cli mcp [--connect HOST:PORT | --author NAME] [--root DIR]
+                                              MCP server on stdio (headless, or bridged to the app);
+                                              agents may only open and save files inside --root
+                                              (default: the current folder)
   wordcraft-cli zotero <command> <file> [--cmd 'id={json}' …] [--save OUT] [--trace] [--port P]
                                               run a Zotero command on a document (Zotero must be
                                               running): addEditCitation, addEditBibliography,
@@ -85,7 +87,11 @@ const RUN_OPTIONS: &[OptionSpec] = &[
 ];
 const COMMANDS_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--json", takes_value: false }];
 const PARITY_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--markdown", takes_value: false }];
-const MCP_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--connect", takes_value: true }, OptionSpec { name: "--author", takes_value: true }];
+const MCP_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--connect", takes_value: true },
+    OptionSpec { name: "--author", takes_value: true },
+    OptionSpec { name: "--root", takes_value: true },
+];
 const ZOTERO_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--cmd", takes_value: true },
     OptionSpec { name: "--save", takes_value: true },
@@ -234,7 +240,16 @@ fn run(args: &[String]) -> Result<(), String> {
                     Box::new(headless)
                 }
             };
-            let mut server = wordcraft_mcp::Server::new(backend);
+            // Agents' file paths stay inside one folder: a document the agent reads may try to
+            // steer it into opening or overwriting other files.
+            let paths = match arg_value(&rest, "--root") {
+                Some(dir) => wordcraft_mcp::PathPolicy::within(std::path::Path::new(&dir))?,
+                None => wordcraft_mcp::PathPolicy::current_dir(),
+            };
+            if let Some(root) = paths.root() {
+                eprintln!("wordcraft-cli: agents may use files in {}", root.display());
+            }
+            let mut server = wordcraft_mcp::Server::with_paths(backend, paths);
             let stdin = std::io::stdin();
             server.serve(stdin.lock(), std::io::stdout()).map_err(|e| e.to_string())
         }
@@ -372,6 +387,8 @@ mod tests {
     fn author_flag_names_the_headless_session() {
         assert!(validate_options("run", &args(&["--author", "Claude (copyedit)", "--cmd", "edit.undo"]), RUN_OPTIONS).is_ok());
         assert!(validate_options("mcp", &args(&["--author", "Claude"]), MCP_OPTIONS).is_ok());
+        assert!(validate_options("mcp", &args(&["--root", "/tmp"]), MCP_OPTIONS).is_ok());
+        assert!(run(&args(&["mcp", "--root", "/no/such/folder/for/wordcraft"])).is_err_and(|e| e.contains("--root")));
         let mut s = Session::new(wordcraft_doc::Document::new());
         assert!(set_author(&mut s, " Claude (copyedit) ").is_ok());
         assert_eq!(s.author, "Claude (copyedit)");

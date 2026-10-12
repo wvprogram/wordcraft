@@ -979,10 +979,9 @@ impl<'r> Builder<'r> {
                 }
             }
             "a" => {
-                if let Some(h) =
-                    attr(attrs, "href").filter(|h| !h.trim().is_empty() && !h.trim_start().to_ascii_lowercase().starts_with("javascript:"))
-                {
-                    fmt.link = Some(h.trim().to_string());
+                // `java⇥script:` and other spellings browsers run are dropped too (link::normalized).
+                if let Some(h) = attr(attrs, "href").filter(|h| wordcraft_doc::link::is_safe_target(h)) {
+                    fmt.link = Some(wordcraft_doc::link::normalized(h));
                 }
             }
             _ => {}
@@ -1180,8 +1179,10 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
             Inline::Text(t, f) => {
                 let mut open = String::new();
                 let mut close: Vec<&str> = Vec::new();
-                if let Some(l) = &f.link {
-                    open.push_str(&format!("<a href=\"{}\">", esc(l)));
+                // Only safe targets become links: a document's `javascript:` link must not turn
+                // into a script in the exported page. Its text is kept.
+                if let Some(l) = f.link.as_deref().filter(|l| wordcraft_doc::link::is_safe_target(l)) {
+                    open.push_str(&format!("<a href=\"{}\">", esc(&wordcraft_doc::link::normalized(l))));
                     close.push("</a>");
                 }
                 let mut tag = |o: &str, c: &'static str| {
